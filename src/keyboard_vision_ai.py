@@ -3,7 +3,6 @@ import json
 import threading
 from datetime import datetime
 from pathlib import Path
-
 from pynput import keyboard
 from transformers import pipeline
 from win10toast import ToastNotifier
@@ -13,6 +12,10 @@ import torch
 import tkinter as tk
 from tkinter import ttk
 from pynput import keyboard as kb
+from cryptography.fernet import Fernet
+import base64
+import hashlib
+from dashboard_window import show_dashboard
 
 # ---------------------- Configuration ----------------------
 CONFIG_FILE = Path.home() / '.keyboard_vision_settings.json'
@@ -20,13 +23,16 @@ SUMMARY_FILE = Path.home() / '.keyboard_vision_alerts.log'
 
 # Default settings if CONFIG_FILE does not exist
 DEFAULT_SETTINGS = {
-    'threshold': 0.90,    # Confidence threshold for alerts (0.0 - 1.0)
+    'threshold': 0.99,    # Confidence threshold for alerts (0.0 - 1.0)
     'buffer_size': 100    # Max characters before running classification
 }
 
-# ---------------------- Risky Keywords ----------------------
+# ---------------------- Risky & Excluded Keywords ----------------------
 RISKY_KEYWORDS = {
     "joder","mierda", "puta", "pendejo", "culo",
+}
+EXCLUDED_WORDS = {
+    "you", "will", "lol", "game", "play", "killstreak", "headshot", "winner"
 }
 
 # ---------------------- Settings Management ----------------------
@@ -58,46 +64,65 @@ buffer_size = settings['buffer_size']
 
 # ---------------------- Model Initialization ----------------------
 # Use GPU if available, otherwise CPU
-device = 0 if torch.cuda.is_available() else -1
+LABELS = ["self-harm", "bullying", "profanity", "harassment", "hate speech", "mental health", "violence", "threat"]
+
 classifier = pipeline(
-    'text-classification',
-    model='distilbert-base-uncased-finetuned-sst-2-english',
-    device=device
+    "zero-shot-classification",
+    model="facebook/bart-large-mnli",  # Good accuracy for zero-shot
+    device=0 if torch.cuda.is_available() else -1
 )
+# ---------------------- Key Generation ----------------------
+def generate_key(password: str) -> bytes:
+    """Generate a Fernet key from a password string"""
+    hashed = hashlib.sha256(password.encode()).digest()
+    return base64.urlsafe_b64encode(hashed)
+
+# Generate key from a secure password
+ENCRYPTION_PASSWORD = "parent123"
+fernet = Fernet(generate_key(ENCRYPTION_PASSWORD))
 
 # ---------------------- Notification ----------------------
 toaster = ToastNotifier()
 
-def send_notification(text: str, score: float):
-    """Show a desktop toast and log the alert to SUMMARY_FILE with custom icon."""
+def send_notification(text: str, score: float, source="model", labels=None):
     icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "images", "keyboard_vision_icon.ico"))
-
+    label_info = ", ".join(labels) if labels else "unknown"
     toaster.show_toast(
         "Keyboard Vision Alert",
-        f"Risk detected: '{text[:50]}...' (score={score:.2f})",
+        f"⚠️ Risk detected!\nCategory: {label_info}\n'{text[:50]}..!'",
         duration=5,
         icon_path=icon_path
     )
 
     timestamp = datetime.now().isoformat()
-    with open(SUMMARY_FILE, 'a', encoding='utf-8') as f:
-        f.write(f"{timestamp}\t{score:.2f}\t{text}\n")
+    log_entry = f"{timestamp}\t{score:.2f}\t{source}\t{','.join(labels or [])}\t{text}"
+    encrypted = fernet.encrypt(log_entry.encode())
 
-
+    with open(SUMMARY_FILE, 'ab') as f:  # binary mode
+        f.write(encrypted + b'\n')
+# ---------------------- Classification & Alerting ----------------------
 def classify_and_alert(text: str):
-    result = classifier(text)[0]
-    label = result['label'].lower()
-    score = result['score']
     lowered = text.lower()
 
-    keyword_trigger = any(keyword in lowered for keyword in RISKY_KEYWORDS)
-    model_trigger = label in ['negative', 'self-harm', 'toxic'] and score >= threshold
+    # Skip if the entire message is just an excluded word (or mostly noise)
+    if any(word in lowered for word in EXCLUDED_WORDS):
+        if all(w in EXCLUDED_WORDS for w in lowered.split()):
+            return  # Only safe words present → skip check
 
-    # Force score to 1.00 if keyword-triggered
+    keyword_trigger = any(keyword in lowered for keyword in RISKY_KEYWORDS)
+
+    result = classifier(text, candidate_labels=LABELS, multi_label=True)
+    scores = dict(zip(result["labels"], result["scores"]))
+    triggered_labels = {label: score for label, score in scores.items() if score >= threshold}
+    model_trigger = bool(triggered_labels)
+
     if keyword_trigger:
-        send_notification(text, 1.00)
+        send_notification(text, 1.00, source="keyword", labels=["custom-keyword"])
     elif model_trigger:
-        send_notification(text, score)
+        top_label = max(triggered_labels, key=triggered_labels.get)
+        send_notification(text, scores[top_label], source="multi-label", labels=list(triggered_labels.keys()))
+
+
 
 def schedule_classification(text: str):
     """Run classification in background to avoid blocking keystroke listener."""
@@ -163,7 +188,11 @@ def quit_app(icon, item):
     listener.stop()
 
 # Build the tray menu
+def launch_dashboard():
+    threading.Thread(target=show_dashboard, daemon=True).start()
+
 menu = pystray.Menu(
+    pystray.MenuItem('Dashboard', lambda icon, item: launch_dashboard()),
     pystray.MenuItem('Settings', open_settings_window),
     pystray.MenuItem('Quit', quit_app)
 )
