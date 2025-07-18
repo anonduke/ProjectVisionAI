@@ -9,12 +9,16 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import requests
 import io
 import datetime
+import os
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 # --- Config ---
 SUMMARY_FILE = Path.home() / '.keyboard_vision_alerts.log'
 ENCRYPTION_PASSWORD = "parent123"
-TELEGRAM_BOT_TOKEN = "8068389640:AAEqQPrsZQbVQWJhYb-PkIJEcSCbhXXMyn0"
-TELEGRAM_CHAT_ID = "7985762153"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # --- Crypto Utilities ---
 def generate_key(password: str) -> bytes:
@@ -38,6 +42,9 @@ def decrypt_log_lines(password: str):
 
 # --- Telegram Integration ---
 def send_chart_to_telegram(fig):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        messagebox.showerror("Configuration Error", "Telegram bot token or chat ID not set in environment.")
+        return
     buf = io.BytesIO()
     fig.savefig(buf, format='png')
     buf.seek(0)
