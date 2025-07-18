@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw
 import torch
 import tkinter as tk
 from tkinter import ttk
+from pynput import keyboard as kb
 
 # ---------------------- Configuration ----------------------
 CONFIG_FILE = Path.home() / '.keyboard_vision_settings.json'
@@ -21,6 +22,11 @@ SUMMARY_FILE = Path.home() / '.keyboard_vision_alerts.log'
 DEFAULT_SETTINGS = {
     'threshold': 0.90,    # Confidence threshold for alerts (0.0 - 1.0)
     'buffer_size': 100    # Max characters before running classification
+}
+
+# ---------------------- Risky Keywords ----------------------
+RISKY_KEYWORDS = {
+    "joder","mierda", "puta", "pendejo", "culo",
 }
 
 # ---------------------- Settings Management ----------------------
@@ -70,7 +76,7 @@ def send_notification(text: str, score: float):
         "Keyboard Vision Alert",
         f"Risk detected: '{text[:50]}...' (score={score:.2f})",
         duration=5,
-        icon_path=icon_path  # ✅ custom icon here
+        icon_path=icon_path
     )
 
     timestamp = datetime.now().isoformat()
@@ -79,12 +85,18 @@ def send_notification(text: str, score: float):
 
 
 def classify_and_alert(text: str):
-    """Run the text through the model and trigger notification if above threshold."""
     result = classifier(text)[0]
     label = result['label'].lower()
     score = result['score']
-    # Adjust labels based on your fine-tuning
-    if label in ['negative', 'self-harm', 'toxic'] and score >= threshold:
+    lowered = text.lower()
+
+    keyword_trigger = any(keyword in lowered for keyword in RISKY_KEYWORDS)
+    model_trigger = label in ['negative', 'self-harm', 'toxic'] and score >= threshold
+
+    # Force score to 1.00 if keyword-triggered
+    if keyword_trigger:
+        send_notification(text, 1.00)
+    elif model_trigger:
         send_notification(text, score)
 
 def schedule_classification(text: str):
@@ -162,11 +174,22 @@ tray_icon = pystray.Icon(
     'Keyboard Vision AI',
     menu
 )
+def on_activate_exit():
+    print("🔴 Keyboard Vision AI terminated via hotkey.")
+    listener.stop()
+    tray_icon.stop()
+    os._exit(0)  # force exit
+
+# Define hotkey: CTRL + ALT + Q (you can change this combo)
+exit_hotkey = kb.GlobalHotKeys({
+    '<ctrl>+<alt>+q': on_activate_exit
+})
 
 # ---------------------- Main Execution ----------------------
 if __name__ == '__main__':
     # Start listening to keystrokes
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
+    exit_hotkey.start()
     # Launch system tray icon (blocks until Quit)
     tray_icon.run()
