@@ -23,11 +23,10 @@ SUMMARY_FILE = Path.home() / '.keyboard_vision_alerts.log'
 
 # Default settings if CONFIG_FILE does not exist
 DEFAULT_SETTINGS = {
-    'threshold': 0.99,    # Confidence threshold for alerts (0.0 - 1.0)
-    'buffer_size': 100    # Max characters before running classification
+    'threshold': 0.99,
+    'buffer_size': 100
 }
 
-# ---------------------- Risky & Excluded Keywords ----------------------
 RISKY_KEYWORDS = {
     "joder","mierda", "puta", "pendejo", "culo",
 }
@@ -37,13 +36,11 @@ EXCLUDED_WORDS = {
 
 # ---------------------- Settings Management ----------------------
 def load_settings():
-    """Load settings from disk, or create defaults if missing/corrupt."""
     if not CONFIG_FILE.exists():
         save_settings(DEFAULT_SETTINGS)
         return DEFAULT_SETTINGS.copy()
     try:
         data = json.loads(CONFIG_FILE.read_text())
-        # Ensure all keys present
         for key, default in DEFAULT_SETTINGS.items():
             data.setdefault(key, default)
         return data
@@ -51,33 +48,28 @@ def load_settings():
         return DEFAULT_SETTINGS.copy()
 
 def save_settings(settings: dict):
-    """Persist settings to disk as JSON."""
     try:
         CONFIG_FILE.write_text(json.dumps(settings, indent=4))
     except IOError as e:
         print(f"Error saving settings: {e}")
 
-# Load or initialize settings
 settings = load_settings()
 threshold = settings['threshold']
 buffer_size = settings['buffer_size']
 
 # ---------------------- Model Initialization ----------------------
-# Use GPU if available, otherwise CPU
 LABELS = ["self-harm", "bullying", "profanity", "harassment", "hate speech", "mental health", "violence", "threat"]
-
 classifier = pipeline(
     "zero-shot-classification",
-    model="facebook/bart-large-mnli",  # Good accuracy for zero-shot
+    model="facebook/bart-large-mnli",
     device=0 if torch.cuda.is_available() else -1
 )
+
 # ---------------------- Key Generation ----------------------
 def generate_key(password: str) -> bytes:
-    """Generate a Fernet key from a password string"""
     hashed = hashlib.sha256(password.encode()).digest()
     return base64.urlsafe_b64encode(hashed)
 
-# Generate key from a secure password
 ENCRYPTION_PASSWORD = "parent123"
 fernet = Fernet(generate_key(ENCRYPTION_PASSWORD))
 
@@ -85,32 +77,30 @@ fernet = Fernet(generate_key(ENCRYPTION_PASSWORD))
 toaster = ToastNotifier()
 
 def send_notification(text: str, score: float, source="model", labels=None):
-    icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "images", "keyboard_vision_icon.ico"))
     label_info = ", ".join(labels) if labels else "unknown"
-    toaster.show_toast(
+    threading.Thread(target=lambda: toaster.show_toast(
         "Keyboard Vision Alert",
-        f"⚠️ Risk detected!\nCategory: {label_info}\n'{text[:50]}..!'",
+        f"⚠️ Risk: {text[:50]}..! \n"
+        f"Category : {label_info}",
         duration=5,
-        icon_path=icon_path
-    )
+        icon_path=None
+    ), daemon=True).start()
 
     timestamp = datetime.now().isoformat()
-    log_entry = f"{timestamp}\t{score:.2f}\t{source}\t{','.join(labels or [])}\t{text}"
+    log_entry = f"{timestamp}	{score:.2f}	{source}	{','.join(labels or [])}	{text}"
     encrypted = fernet.encrypt(log_entry.encode())
 
-    with open(SUMMARY_FILE, 'ab') as f:  # binary mode
-        f.write(encrypted + b'\n')
+    with open(SUMMARY_FILE, 'ab') as f:
+        f.write(encrypted + b'')
+
 # ---------------------- Classification & Alerting ----------------------
 def classify_and_alert(text: str):
     lowered = text.lower()
-
-    # Skip if the entire message is just an excluded word (or mostly noise)
     if any(word in lowered for word in EXCLUDED_WORDS):
         if all(w in EXCLUDED_WORDS for w in lowered.split()):
-            return  # Only safe words present → skip check
+            return
 
     keyword_trigger = any(keyword in lowered for keyword in RISKY_KEYWORDS)
-
     result = classifier(text, candidate_labels=LABELS, multi_label=True)
     scores = dict(zip(result["labels"], result["scores"]))
     triggered_labels = {label: score for label, score in scores.items() if score >= threshold}
@@ -122,26 +112,17 @@ def classify_and_alert(text: str):
         top_label = max(triggered_labels, key=triggered_labels.get)
         send_notification(text, scores[top_label], source="multi-label", labels=list(triggered_labels.keys()))
 
-
-
 def schedule_classification(text: str):
-    """Run classification in background to avoid blocking keystroke listener."""
-    threading.Thread(
-        target=classify_and_alert,
-        args=(text,),
-        daemon=True
-    ).start()
+    threading.Thread(target=classify_and_alert, args=(text,), daemon=True).start()
 
 # ---------------------- Keystroke Listener ----------------------
 buffer = ''
 
 def on_press(key):
-    """Callback for each key press: accumulate chars and flush on whitespace or limit."""
     global buffer
     try:
         char = key.char or ''
     except AttributeError:
-        # Non-character key treated as a space (flush point)
         char = ' '
     buffer += char
     if char.isspace() or len(buffer) >= buffer_size:
@@ -152,7 +133,6 @@ def on_press(key):
 
 # ---------------------- System Tray & Settings UI ----------------------
 def create_tray_icon_image():
-    """Generate a simple 64×64 icon for the tray."""
     img = Image.new('RGB', (64, 64), 'white')
     draw = ImageDraw.Draw(img)
     draw.rectangle((0, 0, 63, 63), outline='black')
@@ -160,7 +140,6 @@ def create_tray_icon_image():
     return img
 
 def open_settings_window(icon, item):
-    """Display a Tkinter window to adjust threshold and buffer_size."""
     window = tk.Tk()
     window.title('Keyboard Vision Settings')
     window.geometry('300x180')
@@ -183,14 +162,15 @@ def open_settings_window(icon, item):
     window.mainloop()
 
 def quit_app(icon, item):
-    """Stop the tray icon and keyboard listener, then exit."""
     icon.stop()
     listener.stop()
 
-# Build the tray menu
+# Dashboard launch via tray or hotkey
+
 def launch_dashboard():
     threading.Thread(target=show_dashboard, daemon=True).start()
 
+# Build the tray menu
 menu = pystray.Menu(
     pystray.MenuItem('Dashboard', lambda icon, item: launch_dashboard()),
     pystray.MenuItem('Settings', open_settings_window),
@@ -204,21 +184,33 @@ tray_icon = pystray.Icon(
     menu
 )
 def on_activate_exit():
-    print("🔴 Keyboard Vision AI terminated via hotkey.")
-    listener.stop()
-    tray_icon.stop()
-    os._exit(0)  # force exit
+    def ask_password():
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        password = tk.simpledialog.askstring("Authentication Required", "Enter parent password:", show='*')
+        root.destroy()
+        return password == ENCRYPTION_PASSWORD
 
-# Define hotkey: CTRL + ALT + Q (you can change this combo)
+    if ask_password():
+        print("🔴🔴🔴🔴 Keyboard Vision AI terminated via hotkey. 🔴🔴🔴🔴")
+        listener.stop()
+        tray_icon.stop()
+        os._exit(0)
+    else:
+        print("❌ Incorrect password. Termination aborted.")
+
+def on_activate_dashboard():
+    print("Opening dashboard via hotkey...")
+    launch_dashboard()
+
 exit_hotkey = kb.GlobalHotKeys({
-    '<ctrl>+<alt>+q': on_activate_exit
+    '<ctrl>+<alt>+q': on_activate_exit,
+    '<ctrl>+<alt>+d': on_activate_dashboard
 })
 
-# ---------------------- Main Execution ----------------------
 if __name__ == '__main__':
-    # Start listening to keystrokes
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
     exit_hotkey.start()
-    # Launch system tray icon (blocks until Quit)
     tray_icon.run()
