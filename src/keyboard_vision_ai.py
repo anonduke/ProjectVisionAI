@@ -16,6 +16,8 @@ from cryptography.fernet import Fernet
 import base64
 import hashlib
 from dashboard_window import show_dashboard
+from sklearn.metrics import classification_report
+import pandas as pd
 
 # ---------------------- Configuration ----------------------
 CONFIG_FILE = Path.home() / '.keyboard_vision_settings.json'
@@ -31,8 +33,19 @@ RISKY_KEYWORDS = {
     "joder","mierda", "puta", "pendejo", "culo",
 }
 EXCLUDED_WORDS = {
-    "you", "will", "lol", "game", "play", "killstreak", "headshot", "winner"
+    "you", "will", "lol", "game", "play", "killstreak", "headshot", "winner", 
+    "likes", "nobody", "even", "exist", "myself", "away", "just", "want","whish","t"
 }
+# ---------------------- Sample Data for Testing ----------------------
+test_samples = [
+    {"text": "I want to die", "labels": ["self-harm"]},
+    {"text": "You are so stupid", "labels": ["bullying"]},
+    {"text": "Go to hell", "labels": ["profanity"]},
+    {"text": "I love pizza", "labels": []},
+    {"text": "You're amazing!", "labels": []},
+    {"text": "I will kill you", "labels": ["threat", "violence"]},
+]
+
 
 # ---------------------- Settings Management ----------------------
 def load_settings():
@@ -61,10 +74,21 @@ buffer_size = settings['buffer_size']
 LABELS = ["self-harm", "bullying", "profanity", "harassment", "hate speech", "mental health", "violence", "threat"]
 classifier = pipeline(
     "zero-shot-classification",
-    model="facebook/bart-large-mnli",
+    #model="facebook/bart-large-mnli",
+    #model="facebook--bart-large-cnn"
+    #model="distilbert-base-uncased-finetuned-sst-2-english"
+    model="MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli", 
+    #model="QuantStack--Wan2.1_I2V_14B_FusionX-GGUF",
+    #model="typeform/distilbert-base-uncased-mnli",
     device=0 if torch.cuda.is_available() else -1
 )
 
+# device = 0 if torch.cuda.is_available() else -1
+# classifier = pipeline(
+#     'text-classification',
+#     model='distilbert-base-uncased-finetuned-sst-2-english',
+#     device=device
+# )
 # ---------------------- Key Generation ----------------------
 def generate_key(password: str) -> bytes:
     hashed = hashlib.sha256(password.encode()).digest()
@@ -105,6 +129,12 @@ def classify_and_alert(text: str):
     scores = dict(zip(result["labels"], result["scores"]))
     triggered_labels = {label: score for label, score in scores.items() if score >= threshold}
     model_trigger = bool(triggered_labels)
+
+    # print("----------")
+    # print(f"Text: {text}")
+    # for label, score in zip(result["labels"], result["scores"]):
+    #     print(f"{label}: {score:.2f}")
+    # print("----------") 
 
     if keyword_trigger:
         send_notification(text, 1.00, source="keyword", labels=["custom-keyword"])
@@ -198,7 +228,7 @@ def on_activate_exit():
         tray_icon.stop()
         os._exit(0)
     else:
-        print("❌ Incorrect password. Termination aborted.")
+        print("Incorrect password. Termination aborted.")
 
 def on_activate_dashboard():
     print("Opening dashboard via hotkey...")
@@ -208,8 +238,26 @@ exit_hotkey = kb.GlobalHotKeys({
     '<ctrl>+<alt>+q': on_activate_exit,
     '<ctrl>+<alt>+d': on_activate_dashboard
 })
+def evaluate_model(classifier, label_list):
+    y_true = []
+    y_pred = []
+
+    for sample in test_samples:
+        result = classifier(sample["text"], candidate_labels=label_list, multi_label=True)
+        pred_labels = [label for label, score in zip(result["labels"], result["scores"]) if score >= 0.7]
+        
+        y_true.append([1 if l in sample["labels"] else 0 for l in label_list])
+        y_pred.append([1 if l in pred_labels else 0 for l in label_list])
+
+    print("\n Evaluation on Test Samples:")
+    print(classification_report(
+        y_true, y_pred,
+        target_names=label_list,
+        zero_division=0  # Avoids crashing on undefined metrics
+    ))
 
 if __name__ == '__main__':
+    evaluate_model(classifier, LABELS)
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
     exit_hotkey.start()

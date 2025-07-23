@@ -72,6 +72,9 @@ Avoid exaggeration. Stay neutral and helpful. Add Keyboardvision AI as the sourc
     except Exception as e:
         return f"(OpenAI Error: {str(e)})"
 
+# def get_openai_feedback(label_counts):
+#     # GPT-4 feedback temporarily disabled
+#     return "(AI feedback is currently disabled for testing.)"
 
 # ---------------------- Telegram Sender ----------------------
 def send_chart_and_feedback(fig, feedback):
@@ -221,7 +224,7 @@ def show_dashboard():
     typed_label = tk.Label(inner_frame, text="", justify="left", font=("Helvetica", 11), wraplength=1000, bg="#f8f9fa")
     typed_label.pack(anchor="w", padx=10, pady=10)
 
-    def blink_border(times=6):
+    def blink_border(times=20):
         if times <= 0:
             feedback_frame.config(highlightbackground="white")
             return
